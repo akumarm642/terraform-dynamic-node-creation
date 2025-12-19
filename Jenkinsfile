@@ -2,17 +2,24 @@ pipeline {
     agent {
         docker {
             image 'hashicorp/terraform:1.6'
-            args '--entrypoint=""'  // ensures we can run shell commands
+            args '--entrypoint=""'
         }
     }
 
+    parameters {
+        choice(
+            name: 'TF_ACTION',
+            choices: ['apply', 'destroy'],
+            description: 'Terraform action to perform'
+        )
+    }
+
     environment {
-        // Set your AWS credentials stored in Jenkins
-        AWS_ACCESS_KEY_ID     = credentials('aws-access-key-id')
-        AWS_SECRET_ACCESS_KEY = credentials('aws-secret-access-key')
+        AWS_DEFAULT_REGION = 'eu-north-1'
     }
 
     stages {
+
         stage('Checkout') {
             steps {
                 checkout scm
@@ -21,7 +28,11 @@ pipeline {
 
         stage('Terraform Init') {
             steps {
-                withCredentials([file(credentialsId: 'ssh-public-key', variable: 'SSH_KEY')]) {
+                withCredentials([
+                    string(credentialsId: 'aws-access-key-id', variable: 'AWS_ACCESS_KEY_ID'),
+                    string(credentialsId: 'aws-secret-access-key', variable: 'AWS_SECRET_ACCESS_KEY'),
+                    file(credentialsId: 'ssh-public-key', variable: 'SSH_KEY')
+                ]) {
                     sh '''
                         export TF_VAR_public_key_path=$SSH_KEY
                         terraform init -reconfigure
@@ -31,8 +42,15 @@ pipeline {
         }
 
         stage('Terraform Plan') {
+            when {
+                expression { params.TF_ACTION == 'apply' }
+            }
             steps {
-                withCredentials([file(credentialsId: 'ssh-public-key', variable: 'SSH_KEY')]) {
+                withCredentials([
+                    string(credentialsId: 'aws-access-key-id', variable: 'AWS_ACCESS_KEY_ID'),
+                    string(credentialsId: 'aws-secret-access-key', variable: 'AWS_SECRET_ACCESS_KEY'),
+                    file(credentialsId: 'ssh-public-key', variable: 'SSH_KEY')
+                ]) {
                     sh '''
                         export TF_VAR_public_key_path=$SSH_KEY
                         terraform plan
@@ -41,13 +59,21 @@ pipeline {
             }
         }
 
-        stage('Terraform Apply') {
-            when { branch 'main' }  // only apply on main branch
+        stage('Terraform Apply / Destroy') {
             steps {
-                withCredentials([file(credentialsId: 'ssh-public-key', variable: 'SSH_KEY')]) {
+                withCredentials([
+                    string(credentialsId: 'aws-access-key-id', variable: 'AWS_ACCESS_KEY_ID'),
+                    string(credentialsId: 'aws-secret-access-key', variable: 'AWS_SECRET_ACCESS_KEY'),
+                    file(credentialsId: 'ssh-public-key', variable: 'SSH_KEY')
+                ]) {
                     sh '''
                         export TF_VAR_public_key_path=$SSH_KEY
-                        terraform apply -auto-approve
+
+                        if [ "${TF_ACTION}" = "apply" ]; then
+                          terraform apply -auto-approve
+                        else
+                          terraform destroy -auto-approve
+                        fi
                     '''
                 }
             }
@@ -55,14 +81,14 @@ pipeline {
     }
 
     post {
-        always {
-            echo "Pipeline finished"
-        }
         success {
-            echo "Terraform applied successfully!"
+            echo "Terraform ${TF_ACTION} completed successfully"
         }
         failure {
-            echo "Terraform failed"
+            echo "Terraform ${TF_ACTION} failed"
+        }
+        always {
+            echo "Pipeline finished"
         }
     }
 }
