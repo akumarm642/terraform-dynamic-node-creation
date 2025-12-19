@@ -1,64 +1,69 @@
 pipeline {
-  agent {
-    docker {
-      image 'hashicorp/terraform:1.6'
-      args '--entrypoint=""'
-    }
-  }
-
-//  environment {
-//    AWS_DEFAULT_REGION = 'eu-north-1'
-//  }
-
-  stages {
-
-    stage('Checkout') {
-      steps {
-        checkout scm
-      }
-    }
-
-    stage('Terraform Init') {
-      steps {
-        withCredentials([
-          string(credentialsId: 'aws-access-key-id', variable: 'AWS_ACCESS_KEY_ID'),
-          string(credentialsId: 'aws-secret-access-key', variable: 'AWS_SECRET_ACCESS_KEY')
-        ]) {
-          sh 'terraform init -reconfigure'
+    agent {
+        docker {
+            image 'hashicorp/terraform:1.6'
+            args '--entrypoint=""'  // ensures we can run shell commands
         }
-      }
     }
 
-    stage('Terraform Plan') {
-      steps {
-        withCredentials([
-          string(credentialsId: 'aws-access-key-id', variable: 'AWS_ACCESS_KEY_ID'),
-          string(credentialsId: 'aws-secret-access-key', variable: 'AWS_SECRET_ACCESS_KEY')
-        ]) {
-          sh 'terraform plan'
+    environment {
+        // Set your AWS credentials stored in Jenkins
+        AWS_ACCESS_KEY_ID     = credentials('aws-access-key-id')
+        AWS_SECRET_ACCESS_KEY = credentials('aws-secret-access-key')
+    }
+
+    stages {
+        stage('Checkout') {
+            steps {
+                checkout scm
+            }
         }
-      }
-    }
 
-    stage('Terraform Apply') {
-      steps {
-        withCredentials([
-          string(credentialsId: 'aws-access-key-id', variable: 'AWS_ACCESS_KEY_ID'),
-          string(credentialsId: 'aws-secret-access-key', variable: 'AWS_SECRET_ACCESS_KEY')
-        ]) {
-          sh 'terraform apply -auto-approve'
+        stage('Terraform Init') {
+            steps {
+                withCredentials([file(credentialsId: 'ssh-public-key', variable: 'SSH_KEY')]) {
+                    sh '''
+                        export TF_VAR_public_key_path=$SSH_KEY
+                        terraform init -reconfigure
+                    '''
+                }
+            }
         }
-      }
-    }
-  }
 
-  post {
-    success {
-      echo 'EC2 created and Selenium nodes started successfully'
+        stage('Terraform Plan') {
+            steps {
+                withCredentials([file(credentialsId: 'ssh-public-key', variable: 'SSH_KEY')]) {
+                    sh '''
+                        export TF_VAR_public_key_path=$SSH_KEY
+                        terraform plan
+                    '''
+                }
+            }
+        }
+
+        stage('Terraform Apply') {
+            when { branch 'main' }  // only apply on main branch
+            steps {
+                withCredentials([file(credentialsId: 'ssh-public-key', variable: 'SSH_KEY')]) {
+                    sh '''
+                        export TF_VAR_public_key_path=$SSH_KEY
+                        terraform apply -auto-approve
+                    '''
+                }
+            }
+        }
     }
-    failure {
-      echo 'Terraform failed'
+
+    post {
+        always {
+            echo "Pipeline finished"
+        }
+        success {
+            echo "Terraform applied successfully!"
+        }
+        failure {
+            echo "Terraform failed"
+        }
     }
-  }
 }
 
